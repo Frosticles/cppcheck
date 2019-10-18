@@ -676,6 +676,8 @@ static void setTokenValue(Token* tok, const ValueFlow::Value &value, const Setti
     }
 
     if (value.isLifetimeValue()) {
+        if (!isLifetimeBorrowed(parent, settings))
+            return;
         if (value.lifetimeKind == ValueFlow::Value::LifetimeKind::Iterator && astIsIterator(parent)) {
             setTokenValue(parent,value,settings);
         } else if (astIsPointer(tok) && astIsPointer(parent) &&
@@ -1841,6 +1843,16 @@ static void valueFlowGlobalStaticVar(TokenList *tokenList, const Settings *setti
     }
 }
 
+static void valueFlowForward(Token* startToken,
+                             const Token* endToken,
+                             const Token* exprTok,
+                             std::list<ValueFlow::Value> values,
+                             const bool constValue,
+                             const bool subFunction,
+                             TokenList* const tokenlist,
+                             ErrorLogger* const errorLogger,
+                             const Settings* settings);
+
 static void valueFlowReverse(TokenList *tokenlist,
                              Token *tok,
                              const Token * const varToken,
@@ -1865,8 +1877,30 @@ static void valueFlowReverse(TokenList *tokenlist,
         }
 
         if (tok2->varId() == varid) {
+            if (tok2->hasKnownValue())
+                break;
             // bailout: assignment
             if (Token::Match(tok2->previous(), "!!* %name% =")) {
+                Token* assignTok = const_cast<Token*>(tok2->next()->astOperand2());
+                if (!assignTok->hasKnownValue()) {
+                    std::list<ValueFlow::Value> values = {val};
+                    setTokenValue(assignTok, val, settings);
+                    if (val2.condition) {
+                        setTokenValue(assignTok, val2, settings);
+                        values.push_back(val2);
+                    }
+                    const Token* startForwardToken = nextAfterAstRightmostLeaf(tok2->next());
+                    const Token* endForwardToken = tok->scope() ? tok->scope()->bodyEnd : tok;
+                    valueFlowForward(const_cast<Token*>(startForwardToken),
+                                     endForwardToken,
+                                     assignTok,
+                                     values,
+                                     false,
+                                     false,
+                                     tokenlist,
+                                     errorLogger,
+                                     settings);
+                }
                 if (settings->debugwarnings)
                     bailout(tokenlist, errorLogger, tok2, "assignment of " + tok2->str());
                 break;
@@ -2060,6 +2094,17 @@ static void valueFlowReverse(TokenList *tokenlist,
             }
         }
     }
+}
+
+static bool isConditionKnown(const Token* tok, bool then)
+{
+    const char* op = "||";
+    if (then)
+        op = "&&";
+    const Token* parent = tok->astParent();
+    while (parent && parent->str() == op)
+        parent = parent->astParent();
+    return (parent && parent->str() == "(");
 }
 
 static void valueFlowBeforeCondition(TokenList *tokenlist, SymbolDatabase *symboldatabase, ErrorLogger *errorLogger, const Settings *settings)
@@ -3157,7 +3202,7 @@ static void valueFlowForward(Token* startToken,
                              const Settings* settings)
 {
     const Token* expr = solveExprValues(exprTok, values);
-    if (Token::Match(expr, "%var%")) {
+    if (Token::Match(expr, "%var%") && expr->variable()) {
         valueFlowForwardVariable(startToken,
                                  endToken,
                                  expr->variable(),
@@ -3301,7 +3346,7 @@ std::vector<LifetimeToken> getLifetimeTokens(const Token* tok, ValueFlow::Value:
             } else if (Token::simpleMatch(var->declEndToken(), "=")) {
                 errorPath.emplace_back(var->declEndToken(), "Assigned to reference.");
                 const Token *vartok = var->declEndToken()->astOperand2();
-                if (vartok == tok)
+                if (vartok == tok || (var->isConst() && isTemporary(true, vartok)))
                     return {{tok, true, std::move(errorPath)}};
                 if (vartok)
                     return getLifetimeTokens(vartok, std::move(errorPath), depth - 1);
@@ -3902,17 +3947,7 @@ static bool isDecayedPointer(const Token *tok, const Settings *settings)
         return true;
     if (!Token::simpleMatch(tok->astParent(), "return"))
         return false;
-    if (!tok->scope())
-        return false;
-    if (!tok->scope()->function)
-        return false;
-    if (!tok->scope()->function->retDef)
-        return false;
-    // TODO: Add valuetypes to return types of functions
-    ValueType vt = ValueType::parseDecl(tok->scope()->function->retDef, settings);
-    if (vt.pointer > 0)
-        return true;
-    return false;
+    return astIsPointer(tok->astParent());
 }
 
 static void valueFlowLifetime(TokenList *tokenlist, SymbolDatabase*, ErrorLogger *errorLogger, const Settings *settings)
@@ -4309,17 +4344,6 @@ static void valueFlowAfterAssign(TokenList *tokenlist, SymbolDatabase* symboldat
             valueFlowForwardAssign(tok->astOperand2(), var, values, constValue, init, tokenlist, errorLogger, settings);
         }
     }
-}
-
-static bool isConditionKnown(const Token* tok, bool then)
-{
-    const char * op = "||";
-    if (then)
-        op = "&&";
-    const Token* parent = tok->astParent();
-    while (parent && parent->str() == op)
-        parent = parent->astParent();
-    return (parent && parent->str() == "(");
 }
 
 static void valueFlowSetConditionToKnown(const Token* tok, std::list<ValueFlow::Value>& values, bool then)
@@ -5496,6 +5520,9 @@ static void valueFlowSubFunction(TokenList* tokenlist, ErrorLogger* errorLogger,
             // Don't forward lifetime values
             argvalues.remove_if(std::mem_fn(&ValueFlow::Value::isLifetimeValue));
 
+            // Don't forward <Uninit> values, this is handled by CTU. We also had a FP #9347
+            argvalues.remove_if(std::mem_fn(&ValueFlow::Value::isUninitValue));
+
             if (argvalues.empty())
                 continue;
 
@@ -5743,7 +5770,7 @@ static bool isContainerSizeChangedByFunction(const Token *tok, int depth = 20)
         return false;
 
     // address of variable
-    const bool addressOf = tok->astParent() && tok->astParent()->isUnaryOp("&");
+    const bool addressOf = tok->valueType()->pointer || (tok->astParent() && tok->astParent()->isUnaryOp("&"));
 
     int narg;
     const Token * ftok = getTokenArgumentFunction(tok, narg);
@@ -5765,6 +5792,8 @@ static bool isContainerSizeChangedByFunction(const Token *tok, int depth = 20)
                 if (depth > 0)
                     return isContainerSizeChanged(arg->declarationId(), scope->bodyStart, scope->bodyEnd, depth - 1);
             }
+            // Don't know => Safe guess
+            return true;
         }
     }
 

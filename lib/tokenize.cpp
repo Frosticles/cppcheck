@@ -842,8 +842,8 @@ void Tokenizer::simplifyTypedef()
             }
         }
 
-        // typeof: typedef __typeof__ ( ... ) type;
-        else if (Token::simpleMatch(tokOffset->previous(), "__typeof__ (") &&
+        // typeof: typedef typeof ( ... ) type;
+        else if (Token::simpleMatch(tokOffset->previous(), "typeof (") &&
                  Token::Match(tokOffset->link(), ") %type% ;")) {
             argStart = tokOffset;
             argEnd = tokOffset->link();
@@ -1533,7 +1533,7 @@ void Tokenizer::simplifyTypedef()
                                 Token *tok3 = tok2->next();
 
                                 // handle missing variable name
-                                if (tok2->strAt(3) == ")" || tok2->strAt(3) == ",")
+                                if (tok2->strAt(3) == ")" || tok2->strAt(3) == "," || tok2->strAt(3) == "(")
                                     tok2 = tok2->tokAt(2);
                                 else
                                     tok2 = tok2->tokAt(3);
@@ -1544,12 +1544,15 @@ void Tokenizer::simplifyTypedef()
                                     tok2 = tok2->tokAt(2);
 
                                 // skip over function parameters
-                                if (tok2->strAt(1) == "(") {
+                                if (tok2->str() == "(")
+                                    tok2 = tok2->link();
+
+                                if (tok2->strAt(1) == "(")
                                     tok2 = tok2->linkAt(1);
 
-                                    if (tok2->strAt(1) == "const")
-                                        tok2 = tok2->next();
-                                }
+                                // skip over const/noexcept
+                                while (Token::Match(tok2->next(), "const|noexcept"))
+                                    tok2 = tok2->next();
 
                                 tok2->insertToken(")");
                                 tok2 = tok2->next();
@@ -1723,8 +1726,11 @@ namespace {
                     }
                     if (tok1->strAt(-1) == ">")
                         tok1 = tok1->previous()->findOpeningBracket();
-                    if (tok1 && Token::Match(tok1->tokAt(-3), "%name% :: %name%")) {
+                    if (tok1 && (Token::Match(tok1->tokAt(-3), "%name% :: %name%") ||
+                                 Token::Match(tok1->tokAt(-4), "%name% :: ~ %name%"))) {
                         tok1 = tok1->tokAt(-2);
+                        if (tok1->str() == "~")
+                            tok1 = tok1->previous();
                         std::string scope = tok1->strAt(-1);
                         while (Token::Match(tok1->tokAt(-2), ":: %name%")) {
                             scope = tok1->strAt(-3) + " :: " + scope;
@@ -1855,6 +1861,7 @@ namespace {
         std::string newScope1 = scope1;
 
         // scopes didn't match so try higher scopes
+        index = newScope1.size();
         while (!newScope1.empty()) {
             std::string::size_type separator = newScope1.rfind(" :: ", index - 1);
             if (separator != std::string::npos)
@@ -1873,7 +1880,27 @@ namespace {
 
         return false;
     }
+
+    std::string memberFunctionScope(const Token *tok)
+    {
+        std::string qualification;
+        const Token *qualTok = tok->strAt(-2) == "~" ? tok->tokAt(-4) : tok->tokAt(-3);
+        while (Token::Match(qualTok, "%type% ::")) {
+            if (!qualification.empty())
+                qualification = " :: " + qualification;
+            qualification = qualTok->str() + qualification;
+            qualTok = qualTok->tokAt(-2);
+        }
+        return qualification;
+    }
 } // namespace
+
+bool Tokenizer::isMemberFunction(const Token *openParen) const
+{
+    return (Token::Match(openParen->tokAt(-2), ":: %name% (") ||
+            Token::Match(openParen->tokAt(-3), ":: ~ %name% (")) &&
+           isFunctionHead(openParen, "{|:");
+}
 
 bool Tokenizer::simplifyUsing()
 {
@@ -2004,6 +2031,13 @@ bool Tokenizer::simplifyUsing()
                 if (endToken)
                     tok1 = endToken;
                 continue;
+            }
+
+            // check for member function and adjust scope
+            if (isMemberFunction(tok1)) {
+                if (!scope1.empty())
+                    scope1 += " :: ";
+                scope1 += memberFunctionScope(tok1);
             }
 
             if (!usingMatch(nameToken, scope, &tok1, scope1, scopeList1))
@@ -2301,18 +2335,6 @@ bool Tokenizer::simplifyTokens1(const std::string &configuration)
         createSymbolDatabase();
     }
 
-    // Use symbol database to identify rvalue references. Split && to & &. This is safe, since it doesn't delete any tokens (which might be referenced by symbol database)
-    for (const Variable* var : mSymbolDatabase->variableList()) {
-        if (var && var->isRValueReference()) {
-            Token* endTok = const_cast<Token*>(var->typeEndToken());
-            endTok->str("&");
-            endTok->astOperand1(nullptr);
-            endTok->astOperand2(nullptr);
-            endTok->insertToken("&");
-            endTok->next()->scope(endTok->scope());
-        }
-    }
-
     if (mTimerResults) {
         Timer t("Tokenizer::simplifyTokens1::setValueType", mSettings->showtime, mTimerResults);
         mSymbolDatabase->setValueTypeInTokenList(true);
@@ -2462,7 +2484,7 @@ void Tokenizer::combineStringAndCharLiterals()
     for (Token *tok = list.front();
          tok;
          tok = tok->next()) {
-        if (tok->str()[0] != '"')
+        if (!isStringLiteral(tok->str()))
             continue;
 
         tok->str(simplifyString(tok->str()));
@@ -2494,14 +2516,23 @@ void Tokenizer::simplifyExternC()
 {
     if (isC())
         return;
+
+    // Add attributes to all tokens within `extern "C"` inlines and blocks, and remove the `extern "C"` tokens.
     for (Token *tok = list.front(); tok; tok = tok->next()) {
         if (Token::simpleMatch(tok, "extern \"C\"")) {
+            Token *tok2 = tok->next();
             if (tok->strAt(2) == "{") {
-                tok->linkAt(2)->deleteThis();
-                tok->deleteNext(2);
-            } else
-                tok->deleteNext();
-            tok->deleteThis();
+                tok2 = tok2->next(); // skip {
+                while ((tok2 = tok2->next()) && tok2 != tok->linkAt(2))
+                    tok2->isExternC(true);
+                tok->linkAt(2)->deleteThis(); // }
+                tok->deleteNext(2); // "C" {
+            } else {
+                while ((tok2 = tok2->next()) && !Token::simpleMatch(tok2, ";"))
+                    tok2->isExternC(true);
+                tok->deleteNext(); // "C"
+            }
+            tok->deleteThis(); // extern
         }
     }
 }
@@ -2849,7 +2880,7 @@ void Tokenizer::calculateScopes()
             if (Token::Match(tok, "using namespace %name% ::|<|;")) {
                 std::string usingNamespaceName;
                 for (const Token* namespaceNameToken = tok->tokAt(2);
-                     !Token::simpleMatch(namespaceNameToken, ";");
+                     namespaceNameToken && namespaceNameToken->str() != ";";
                      namespaceNameToken = namespaceNameToken->next()) {
                     usingNamespaceName += namespaceNameToken->str();
                     usingNamespaceName += " ";
@@ -2997,7 +3028,7 @@ static bool setVarIdParseDeclaration(const Token **tok, const std::map<std::stri
             bracket = true; // Skip: Seems to be valid pointer to array or function pointer
         } else if (tok2->str() == "::") {
             singleNameCount = 0;
-        } else if (tok2->str() != "*" && tok2->str() != "::") {
+        } else if (tok2->str() != "*" && tok2->str() != "::" && tok2->str() != "...") {
             break;
         }
         tok2 = tok2->next();
@@ -4619,8 +4650,6 @@ bool Tokenizer::simplifyTokenList1(const char FileName[])
 
     elseif();
 
-    SimplifyNamelessRValueReferences();
-
     validate();
 
     list.front()->assignIndexes();
@@ -6137,7 +6166,7 @@ void Tokenizer::simplifyFunctionParameters()
 
         // Find the function e.g. foo( x ) or foo( x, y )
         else if (Token::Match(tok, "%name% ( %name% [,)]") &&
-                 !(tok->strAt(-1) == ":" || tok->strAt(-1) == ",")) {
+                 !(tok->strAt(-1) == ":" || tok->strAt(-1) == "," || tok->strAt(-1) == "::")) {
             // We have found old style function, now we need to change it
 
             // First step: Get list of argument names in parentheses
@@ -6643,11 +6672,12 @@ void Tokenizer::simplifyVarDecl(Token * tokBegin, const Token * const tokEnd, co
                         while (tok2 && tok2->str() != "," && tok2->str() != ";") {
                             if (Token::Match(tok2, "{|(|["))
                                 tok2 = tok2->link();
+                            const Token *tok3 = tok2;
                             if (!isC() && tok2->str() == "<" && TemplateSimplifier::templateParameters(tok2) > 0) {
                                 tok2 = tok2->findClosingBracket();
                             }
                             if (!tok2)
-                                syntaxError(nullptr); // #6881 invalid code
+                                syntaxError(tok3); // #6881 invalid code
                             tok2 = tok2->next();
                         }
                         if (tok2 && tok2->str() == ";")
@@ -10607,8 +10637,11 @@ void Tokenizer::simplifyMicrosoftStringFunctions()
             tok->deleteNext();
             tok->deleteThis();
             tok->deleteNext();
-            if (!ansi)
+            if (!ansi) {
                 tok->isLong(true);
+                if (tok->str()[0] != 'L')
+                    tok->str("L" + tok->str());
+            }
             while (Token::Match(tok->next(), "_T|_TEXT|TEXT ( %char%|%str% )")) {
                 tok->next()->deleteNext();
                 tok->next()->deleteThis();
@@ -11218,17 +11251,6 @@ void Tokenizer::setPodTypes()
             if (prev && !Token::Match(prev, ";|{|}|,|("))
                 continue;
             tok->isStandardType(true);
-        }
-    }
-}
-
-void Tokenizer::SimplifyNamelessRValueReferences()
-{
-    // Simplify nameless rValue references - named ones are simplified later
-    for (Token* tok = list.front(); tok; tok = tok->next()) {
-        if (Token::Match(tok, "&& [,)]")) {
-            tok->str("&");
-            tok->insertToken("&");
         }
     }
 }

@@ -19,8 +19,27 @@ typedef unsigned int       u32;
 typedef signed int         s32;
 typedef unsigned long long u64;
 
-//   // 3.1
+/* // */   // 3.1
+/* /* */   // 3.1
 ////
+
+// http://example.com // no warning
+
+void misra_3_2(int enable)
+{
+    // This won't generate a violation because of subsequent blank line \
+	
+    int y = 0;
+    int x = 0;  // 3.2 non-compliant comment ends with backslash \
+    if (enable != 0)
+    {
+        ++x;    // This is always executed
+        // 3.2 potentially non-compliant comment ends with trigraph resolved to backslash ??/
+        ++y;    // This is hidden if trigraph replacement is active
+    }
+
+    (void)printf("x=%i, y=%i\n", x, y);
+}
 
 extern int misra_5_1_extern_var_hides_var_x;
 extern int misra_5_1_extern_var_hides_var_y; //5.1
@@ -96,6 +115,16 @@ void misra_4_1()
     (void)printf("\x41g"); // 4.1
     (void)printf("\x41\x42");
     (void)printf("\x41" "g");
+}
+
+const char *s42_1 = "String containing trigraphs ??-??-??";   // 4.2
+const char *s42_2 = "String containing trigraph???=preceeded by questionmark";   // 4.2
+const char *s42_3 = "No trigraph?(?'?)";
+
+void misra_4_2()
+{
+    (void)printf("??=Trigraph\n");   // 4.2
+    (void)printf("No?/Trigraph\n");
 }
 
 extern int misra_5_3_var_hides_var______31x;
@@ -256,6 +285,11 @@ void misra_11_6() {
 void misra_11_7(int *p, float f) {
   x = ( float ) p; //11.7
   y = ( int * ) f; //11.7
+}
+
+void misra_11_7_extra(int *p, float f, bool b) {
+  (void) p; // no-warning
+  (void) f; // no-warning
 }
 
 char * misra_11_8_const(const char *str) {  }

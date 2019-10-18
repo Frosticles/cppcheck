@@ -92,6 +92,7 @@ private:
 
         TEST_CASE(passedByValue);
         TEST_CASE(passedByValue_nonConst);
+        TEST_CASE(passedByValue_externC);
 
         TEST_CASE(constVariable);
 
@@ -172,6 +173,7 @@ private:
         TEST_CASE(redundantVarAssignment_after_switch);
         TEST_CASE(redundantVarAssignment_pointer);
         TEST_CASE(redundantVarAssignment_pointer_parameter);
+        TEST_CASE(redundantVarAssignment_array);
         TEST_CASE(redundantInitialization);
         TEST_CASE(redundantMemWrite);
 
@@ -1705,6 +1707,26 @@ private:
             check(code, &s64);
             ASSERT_EQUALS("", errout.str());
         }
+    }
+
+    void passedByValue_externC() {
+        check("struct X { int a[5]; }; void f(X v) { }");
+        ASSERT_EQUALS("[test.cpp:1]: (performance) Function parameter 'v' should be passed by const reference.\n", errout.str());
+
+        check("extern \"C\" { struct X { int a[5]; }; void f(X v) { } }");
+        ASSERT_EQUALS("", errout.str());
+
+        check("struct X { int a[5]; }; extern \"C\" void f(X v) { }");
+        ASSERT_EQUALS("", errout.str());
+
+        check("struct X { int a[5]; }; void f(const X v);");
+        ASSERT_EQUALS("[test.cpp:1]: (performance) Function parameter 'v' should be passed by const reference.\n", errout.str());
+
+        check("extern \"C\" { struct X { int a[5]; }; void f(const X v); }");
+        ASSERT_EQUALS("", errout.str());
+
+        check("struct X { int a[5]; }; extern \"C\" void f(const X v) { }");
+        ASSERT_EQUALS("", errout.str());
     }
 
     void constVariable() {
@@ -6602,6 +6624,18 @@ private:
               "    *p = 1;\n"
               "    if (condition) return;\n"
               "    *p = 2;\n"
+              "}");
+        ASSERT_EQUALS("", errout.str());
+    }
+
+    void redundantVarAssignment_array() {
+        check("void f() {\n"
+              "    int arr[10];\n"
+              "    int i = 0;\n"
+              "    arr[i] = 1;\n"
+              "    i += 2;\n"
+              "    arr[i] = 3;\n"
+              "    dostuff(arr);\n"
               "}");
         ASSERT_EQUALS("", errout.str());
     }

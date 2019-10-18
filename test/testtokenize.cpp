@@ -226,6 +226,7 @@ private:
         TEST_CASE(simplifyFunctionParameters1); // #3721
         TEST_CASE(simplifyFunctionParameters2); // #4430
         TEST_CASE(simplifyFunctionParameters3); // #4436
+        TEST_CASE(simplifyFunctionParameters4); // #9421
         TEST_CASE(simplifyFunctionParametersMultiTemplate);
         TEST_CASE(simplifyFunctionParametersErrors);
 
@@ -3173,6 +3174,11 @@ private:
                             "Item ( int i , int j ) ; "
                             "} ; "
                             "Item :: Item ( int i , int j ) : i ( i ) , j ( j ) { }";
+        ASSERT_EQUALS(code, tokenizeAndStringify(code));
+    }
+
+    void simplifyFunctionParameters4() { // #9421
+        const char code[] = "int foo :: bar ( int , int ) const ;";
         ASSERT_EQUALS(code, tokenizeAndStringify(code));
     }
 
@@ -7222,10 +7228,10 @@ private:
         ASSERT_EQUALS("a\"\"=", testAst("a=\"\""));
         ASSERT_EQUALS("a\'\'=", testAst("a=\'\'"));
         ASSERT_EQUALS("'X''a'>", testAst("('X' > 'a')"));
-        ASSERT_EQUALS("'X''a'>", testAst("(L'X' > L'a')"));
-        ASSERT_EQUALS("'X''a'>", testAst("(u'X' > u'a')"));
-        ASSERT_EQUALS("'X''a'>", testAst("(U'X' > U'a')"));
-        ASSERT_EQUALS("'X''a'>", testAst("(u8'X' > u8'a')"));
+        ASSERT_EQUALS("L'X'L'a'>", testAst("(L'X' > L'a')"));
+        ASSERT_EQUALS("u'X'u'a'>", testAst("(u'X' > u'a')"));
+        ASSERT_EQUALS("U'X'U'a'>", testAst("(U'X' > U'a')"));
+        ASSERT_EQUALS("u8'X'u8'a'>", testAst("(u8'X' > u8'a')"));
 
         ASSERT_EQUALS("a0>bc/d:?", testAst("(a>0) ? (b/(c)) : d;"));
         ASSERT_EQUALS("abc/+d+", testAst("a + (b/(c)) + d;"));
@@ -7269,7 +7275,11 @@ private:
         ASSERT_EQUALS("catch...(", testAst("try {} catch (...) {}"));
 
         ASSERT_EQUALS("FooBar(", testAst("void Foo(Bar&);"));
-        ASSERT_EQUALS("FooBar(", testAst("void Foo(Bar& &);")); // Rvalue reference - simplified from && to & & by real tokenizer
+        ASSERT_EQUALS("FooBar(", testAst("void Foo(Bar&&);"));
+
+        ASSERT_EQUALS("FooBarb&(", testAst("void Foo(Bar& b);"));
+        ASSERT_EQUALS("FooBarb&&(", testAst("void Foo(Bar&& b);"));
+
         ASSERT_EQUALS("DerivedDerived::(", testAst("Derived::~Derived() {}"));
 
         ASSERT_EQUALS("ifCA_FarReadfilenew(,sizeofobjtype(,(!(", testAst("if (!CA_FarRead(file, (void far *)new, sizeof(objtype)))")); // #5910 - don't hang if C code is parsed as C++
@@ -7422,8 +7432,9 @@ private:
         ASSERT_EQUALS("ac5[new(=", testAst("a = (b*)(new c[5]);")); // #8786
         ASSERT_EQUALS("a(4+", testAst("(int)(a) + 4;"));
 
-        // TODO: This AST is incomplete however it's very weird syntax (taken from clang test suite)
-        ASSERT_EQUALS("a&(", testAst("(int (**)[i]){&a}[0][1][5] = 0;"));
+        // (cast){data}[index]
+        ASSERT_EQUALS("a&{(0[1[5[0=", testAst("(int (**)[i]){&a}[0][1][5] = 0;"));
+        ASSERT_EQUALS("ab12,{(0[,(", testAst("a(b, (int []){1,2}[0]);"));
         ASSERT_EQUALS("n0=", testAst("TrivialDefCtor{[2][2]}[1][1].n = 0;"));
         ASSERT_EQUALS("aT12,3,{1[=", testAst("a = T{1, 2, 3}[1];"));
 

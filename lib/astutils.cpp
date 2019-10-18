@@ -220,6 +220,28 @@ const Token * astIsVariableComparison(const Token *tok, const std::string &comp,
     return ret;
 }
 
+bool isTemporary(bool cpp, const Token* tok)
+{
+    if (!tok)
+        return false;
+    if (Token::simpleMatch(tok, "."))
+        return (tok->originalName() != "->" && isTemporary(cpp, tok->astOperand1())) ||
+               isTemporary(cpp, tok->astOperand2());
+    if (Token::Match(tok, ",|::"))
+        return isTemporary(cpp, tok->astOperand2());
+    if (tok->isCast() || (cpp && isCPPCast(tok)))
+        return isTemporary(cpp, tok->astOperand2());
+    if (Token::Match(tok, "?|.|[|++|--|%name%|%assign%"))
+        return false;
+    if (tok->isUnaryOp("*"))
+        return false;
+    if (Token::Match(tok, "&|<<|>>") && isLikelyStream(cpp, tok->astOperand1()))
+        return false;
+    if (Token::Match(tok->previous(), "%name% ("))
+        return tok->previous()->function() && !Function::returnsReference(tok->previous()->function(), true);
+    return true;
+}
+
 static bool isFunctionCall(const Token* tok)
 {
     if (Token::Match(tok, "%name% ("))
@@ -1625,7 +1647,8 @@ static bool isUnchanged(const Token *startToken, const Token *endToken, const st
 struct FwdAnalysis::Result FwdAnalysis::checkRecursive(const Token *expr, const Token *startToken, const Token *endToken, const std::set<int> &exprVarIds, bool local, bool inInnerClass)
 {
     // Parse the given tokens
-    for (const Token *tok = startToken; tok != endToken; tok = tok->next()) {
+
+    for (const Token* tok = startToken; precedes(tok, endToken); tok = tok->next()) {
         if (Token::simpleMatch(tok, "try {")) {
             // TODO: handle try
             return Result(Result::Type::BAILOUT);
@@ -1795,6 +1818,8 @@ struct FwdAnalysis::Result FwdAnalysis::checkRecursive(const Token *expr, const 
             } else if (mWhat == What::Reassign && parent->valueType() && parent->valueType()->pointer && Token::Match(parent->astParent(), "%assign%") && parent == parent->astParent()->astOperand1()) {
                 return Result(Result::Type::READ);
             } else if (Token::Match(parent->astParent(), "%assign%") && !parent->astParent()->astParent() && parent == parent->astParent()->astOperand1()) {
+                if (mWhat == What::Reassign)
+                    return Result(Result::Type::BAILOUT, parent->astParent());
                 continue;
             } else {
                 // TODO: this is a quick bailout

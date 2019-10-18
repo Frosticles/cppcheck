@@ -662,6 +662,9 @@ private:
 };
 
 class CPPCHECKLIB Function {
+    // only symbol database can change this
+    friend class SymbolDatabase;
+
     /** @brief flags mask used to access specific bit. */
     enum {
         fHasBody               = (1 << 0),  ///< @brief has implementation
@@ -865,7 +868,7 @@ public:
 
     static bool argsMatch(const Scope *scope, const Token *first, const Token *second, const std::string &path, nonneg int path_length);
 
-    static bool returnsReference(const Function *function);
+    static bool returnsReference(const Function* function, bool unknown = false);
 
     const Token* returnDefEnd() const {
         if (this->hasTrailingReturnType()) {
@@ -1145,19 +1148,6 @@ public:
           container(nullptr),
           containerTypeToken(nullptr)
     {}
-    ValueType(const ValueType& vt)
-        : sign(vt.sign),
-          type(vt.type),
-          bits(vt.bits),
-          pointer(vt.pointer),
-          constness(vt.constness),
-          typeScope(vt.typeScope),
-          smartPointerType(vt.smartPointerType),
-          smartPointerTypeToken(vt.smartPointerTypeToken),
-          container(vt.container),
-          containerTypeToken(vt.containerTypeToken),
-          originalTypeName(vt.originalTypeName)
-    {}
     ValueType(enum Sign s, enum Type t, nonneg int p)
         : sign(s),
           type(t),
@@ -1195,8 +1185,6 @@ public:
           containerTypeToken(nullptr),
           originalTypeName(otn)
     {}
-    ValueType &operator=(const ValueType &other) = delete;
-
     static ValueType parseDecl(const Token *type, const Settings *settings);
 
     static Type typeFromString(const std::string &typestr, bool longType);

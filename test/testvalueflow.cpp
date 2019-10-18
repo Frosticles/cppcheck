@@ -79,6 +79,7 @@ private:
         TEST_CASE(valueFlowBeforeConditionSizeof);
         TEST_CASE(valueFlowBeforeConditionSwitch);
         TEST_CASE(valueFlowBeforeConditionTernaryOp);
+        TEST_CASE(valueFlowBeforeConditionForward);
 
         TEST_CASE(valueFlowAfterAssign);
         TEST_CASE(valueFlowAfterCondition);
@@ -127,6 +128,8 @@ private:
         TEST_CASE(valueFlowUnknownFunctionReturn);
 
         TEST_CASE(valueFlowPointerAliasDeref);
+
+        TEST_CASE(valueFlowCrashIncompleteCode);
     }
 
     static bool isNotTokValue(const ValueFlow::Value &val) {
@@ -1408,6 +1411,24 @@ private:
             "[test.cpp:8]: (debug) valueflow.cpp:1131:valueFlowReverse bailout: variable abc stopping on goto label\n"
             "[test.cpp:3]: (debug) valueflow.cpp:1813:valueFlowForwardVariable bailout: variable abc. noreturn conditional scope.\n",
             errout.str());
+    }
+
+    void valueFlowBeforeConditionForward() {
+        const char* code;
+
+        code = "void f(int a) {\n"
+               "    int x = a;\n"
+               "    if (a == 123) {}\n"
+               "    int b = x;\n"
+               "}";
+        ASSERT_EQUALS(true, testValueOfX(code, 4U, 123));
+
+        code = "void f(int a) {\n"
+               "    int x = a;\n"
+               "    if (a != 123) {}\n"
+               "    int b = x;\n"
+               "}";
+        ASSERT_EQUALS(true, testValueOfX(code, 4U, 123));
     }
 
     void valueFlowAfterAssign() {
@@ -4123,6 +4144,22 @@ private:
                "}";
         ASSERT(tokenValues(code, "ints [").empty());
 
+        code = "struct A {\n"  // forward, nested function call, #9424
+               "    double getMessage( std::vector<unsigned char> *message );\n"
+               "};\n"
+               "\n"
+               "struct B {\n"
+               "    A *a;\n"
+               "    double getMessage( std::vector<unsigned char> *message ) { return a->getMessage( message ); }\n"
+               "};\n"
+               "\n"
+               "void foo(B *ptr) {\n"
+               "    std::vector<unsigned char> v;\n"
+               "    ptr->getMessage (&v);\n"
+               "    if (v.size () > 0) {}\n" // <- v has unknown size!
+               "}";
+        ASSERT_EQUALS(0U, tokenValues(code, "v . size ( )").size());
+
         // container size => yields
         code = "void f() {\n"
                "  std::string s = \"abcd\";\n"
@@ -4257,6 +4294,17 @@ private:
                "  return x;\n"
                "}\n";
         ASSERT_EQUALS(true, testValueOfX(code, 5U, 123));
+    }
+
+    void valueFlowCrashIncompleteCode() {
+        const char* code;
+
+        code = "void SlopeFloor::setAttr(const Value &val) {\n"
+               "    int x = val;\n"
+               "    if (x >= -1)\n"
+               "        state = x;\n"
+               "}\n";
+        valueOfTok(code, "=");
     }
 };
 

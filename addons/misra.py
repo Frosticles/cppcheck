@@ -740,11 +740,25 @@ class MisraChecker:
 
     def misra_3_1(self, rawTokens):
         for token in rawTokens:
-            if token.str.startswith('/*') or token.str.startswith('//'):
+            starts_with_double_slash = token.str.startswith('//')
+            if token.str.startswith('/*') or starts_with_double_slash:
                 s = token.str.lstrip('/')
-                if '//' in s or '/*' in s:
+                if ((not starts_with_double_slash) and '//' in s) or '/*' in s:
                     self.reportError(token, 3, 1)
 
+    def misra_3_2(self, rawTokens):
+        for token in rawTokens:
+            if token.str.startswith('//'):
+                # Check for comment ends with trigraph which might be replaced
+                # by a backslash.
+                if token.str.endswith('??/'):
+                    self.reportError(token, 3, 2)
+                # Check for comment which has been merged with subsequent line
+                # because it ends with backslash.
+                # The last backslash is no more part of the comment token thus
+                # check if next token exists and compare line numbers.
+                elif (token.next != None) and (token.linenr == token.next.linenr):
+                    self.reportError(token, 3, 2)
 
     def misra_4_1(self, rawTokens):
         for token in rawTokens:
@@ -775,6 +789,16 @@ class MisraChecker:
                 else:
                     self.reportError(token, 4, 1)
 
+    def misra_4_2(self, rawTokens):
+        for token in rawTokens:
+            if (token.str[0] != '"') or (token.str[-1] != '"'):
+                continue
+            # Check for trigraph sequence as defined by ISO/IEC 9899:1999
+            for sequence in ['??=', '??(', '??/', '??)', '??\'', '??<', '??!', '??>', '??-']:
+                if sequence in token.str[1:-1]:
+                    # First trigraph sequence match, report error and leave loop.
+                    self.reportError(token, 4, 2)
+                    break
 
     def misra_5_1(self, data):
         long_vars = {}
@@ -1209,7 +1233,7 @@ class MisraChecker:
                 continue
             if (vt2.pointer > 0 and vt1.pointer == 0 and
                     not vt1.isIntegral() and not vt1.isEnum() and
-                    vt2.type != 'void'):
+                    vt1.type != 'void'):
                 self.reportError(token, 11, 7)
             elif (vt1.pointer > 0 and vt2.pointer == 0 and
                     not vt2.isIntegral() and not vt2.isEnum() and
@@ -2393,7 +2417,9 @@ class MisraChecker:
 
             if cfgNumber == 1:
                 self.misra_3_1(data.rawTokens)
+                self.misra_3_2(data.rawTokens)
                 self.misra_4_1(data.rawTokens)
+                self.misra_4_2(data.rawTokens)
             self.misra_5_1(cfg)
             self.misra_5_2(cfg)
             self.misra_5_3(cfg)

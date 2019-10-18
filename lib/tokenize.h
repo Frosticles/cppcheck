@@ -154,8 +154,6 @@ public:
     */
     bool simplifyTokenList1(const char FileName[]);
 
-    void SimplifyNamelessRValueReferences();
-
     /**
     * Most aggressive simplification of tokenlist
     *
@@ -375,6 +373,10 @@ public:
      * A c;
      */
     void simplifyTypedef();
+
+    /**
+     */
+    bool isMemberFunction(const Token *openParen) const;
 
     /**
      */
