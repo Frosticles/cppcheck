@@ -169,7 +169,7 @@ private:
         TEST_CASE(redundantVarAssignment_7133);
         TEST_CASE(redundantVarAssignment_stackoverflow);
         TEST_CASE(redundantVarAssignment_lambda);
-        TEST_CASE(redundantVarAssignment_for);
+        TEST_CASE(redundantVarAssignment_loop);
         TEST_CASE(redundantVarAssignment_after_switch);
         TEST_CASE(redundantVarAssignment_pointer);
         TEST_CASE(redundantVarAssignment_pointer_parameter);
@@ -1375,6 +1375,7 @@ private:
             settings.addEnabled("portability");
         settings.inconclusive = inconclusive;
 
+        settings.defaultSign = 's';
         // Tokenize..
         Tokenizer tokenizer(&settings, this);
         std::istringstream istr(code);
@@ -1391,34 +1392,34 @@ private:
                                 "    delete [] (double*)f;\n"
                                 "    delete [] (long double const*)(new float[10]);\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:3]: (portability) Casting between float* and double* which have an incompatible binary data representation.\n"
-                      "[test.cpp:4]: (portability) Casting between float* and const long double* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:3]: (portability) Casting between float * and double * which have an incompatible binary data representation.\n"
+                      "[test.cpp:4]: (portability) Casting between float * and const long double * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("void test(const float* f) {\n"
                                 "    double *d = (double*)f;\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between const float* and double* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between const float * and double * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("void test(double* d1) {\n"
                                 "    long double *ld = (long double*)d1;\n"
                                 "    double *d2 = (double*)ld;\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between double* and long double* which have an incompatible binary data representation.\n"
-                      "[test.cpp:3]: (portability) Casting between long double* and double* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between double * and long double * which have an incompatible binary data representation.\n"
+                      "[test.cpp:3]: (portability) Casting between long double * and double * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("char* test(int* i) {\n"
                                 "    long double *d = (long double*)(i);\n"
                                 "    double *d = (double*)(i);\n"
                                 "    float *f = reinterpret_cast<float*>(i);\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between integer* and long double* which have an incompatible binary data representation.\n"
-                      "[test.cpp:3]: (portability) Casting between integer* and double* which have an incompatible binary data representation.\n"
-                      "[test.cpp:4]: (portability) Casting between integer* and float* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between signed int * and long double * which have an incompatible binary data representation.\n"
+                      "[test.cpp:3]: (portability) Casting between signed int * and double * which have an incompatible binary data representation.\n"
+                      "[test.cpp:4]: (portability) Casting between signed int * and float * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("float* test(unsigned int* i) {\n"
                                 "    return (float*)i;\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between integer* and float* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between unsigned int * and float * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("float* test(unsigned int* i) {\n"
                                 "    return (float*)i[0];\n"
@@ -1428,7 +1429,7 @@ private:
         checkInvalidPointerCast("float* test(double& d) {\n"
                                 "    return (float*)&d;\n"
                                 "}");
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between double* and float* which have an incompatible binary data representation.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting between double * and float * which have an incompatible binary data representation.\n", errout.str());
 
         checkInvalidPointerCast("void test(float* data) {\n"
                                 "    f.write((char*)data,sizeof(float));\n"
@@ -1438,7 +1439,7 @@ private:
         checkInvalidPointerCast("void test(float* data) {\n"
                                 "    f.write((char*)data,sizeof(float));\n"
                                 "}", true, true); // #3639
-        ASSERT_EQUALS("[test.cpp:2]: (portability, inconclusive) Casting from float* to char* is not portable due to different binary data representations on different platforms.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability, inconclusive) Casting from float * to signed char * is not portable due to different binary data representations on different platforms.\n", errout.str());
 
 
         checkInvalidPointerCast("long long* test(float* f) {\n"
@@ -1450,7 +1451,7 @@ private:
                                 "    foo((long long*)f);\n"
                                 "    return reinterpret_cast<long long*>(c);\n"
                                 "}", true);
-        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting from float* to integer* is not portable due to different binary data representations on different platforms.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (portability) Casting from float * to signed long long * is not portable due to different binary data representations on different platforms.\n", errout.str());
 
         checkInvalidPointerCast("Q_DECLARE_METATYPE(int*)"); // #4135 - don't crash
     }
@@ -6575,13 +6576,23 @@ private:
         ASSERT_EQUALS("", errout.str());
     }
 
-    void redundantVarAssignment_for() {
+    void redundantVarAssignment_loop() {
         check("void f() {\n"
               "    char buf[10];\n"
               "    int i;\n"
               "    for (i = 0; i < 4; i++)\n"
               "        buf[i] = 131;\n"
               "    buf[i] = 0;\n"
+              "}");
+        ASSERT_EQUALS("", errout.str());
+
+        check("void bar() {\n" // #9262 do-while with break
+              "    int x = 0;\n"
+              "    x = 432;\n"
+              "    do {\n"
+              "        if (foo()) break;\n"
+              "        x = 1;\n"
+              "     } while (false);\n"
               "}");
         ASSERT_EQUALS("", errout.str());
     }
@@ -6667,9 +6678,17 @@ private:
               "}");
         ASSERT_EQUALS("", errout.str());
 
+        // "trivial" initialization => do not warn
         check("void f() {\n"
               "    struct S s = {0};\n"
               "    s = dostuff();\n"
+              "}");
+        ASSERT_EQUALS("", errout.str());
+
+        check("namespace N { enum E {e0,e1}; }\n"
+              "void f() {\n"
+              "    N::E e = N::e0;\n" // #9261
+              "    e = dostuff();\n"
               "}");
         ASSERT_EQUALS("", errout.str());
     }
@@ -6945,6 +6964,14 @@ private:
               "    bar(c);\n"
               "    c = getchar();\n"
               "  } ;\n"
+              "}");
+        ASSERT_EQUALS("[test.cpp:3]: (warning) Storing getchar() return value in char variable and then comparing with EOF.\n", errout.str());
+
+        check("void f() {\n"
+              "  unsigned char c;\n"
+              "  while( EOF != ( c = getchar() ) )\n"
+              "  {\n"
+              "  }\n"
               "}");
         ASSERT_EQUALS("[test.cpp:3]: (warning) Storing getchar() return value in char variable and then comparing with EOF.\n", errout.str());
 
